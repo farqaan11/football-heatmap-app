@@ -1,0 +1,7 @@
+streamlit
+fitparse
+matplotlib
+mplsoccer
+numpy
+scipy
+opencv-python-headless
