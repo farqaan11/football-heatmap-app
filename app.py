@@ -115,7 +115,7 @@ if uploaded_file is not None:
             distances.append(r['dist'])
 
         if len(lats) > 1:
-            cutoff = int(len(lats) * 1)
+            cutoff = int(len(lats) * 1.0)
             lats, lons = np.array(lats[:cutoff]), np.array(lons[:cutoff])
             speeds = np.array(speeds[:cutoff])
 
@@ -152,29 +152,36 @@ if uploaded_file is not None:
                 x_coords, y_coords = x_coords[valid], y_coords[valid]
 
             # Draw Pitch
-            pitch = Pitch(pitch_type='custom', pitch_length=p_length, pitch_width=p_width, pitch_color='#12181b', line_color='#324148')
+            pitch = Pitch(pitch_type='custom', pitch_length=p_length, pitch_width=p_width, pitch_color='#12181b', line_color='#475569')
             fig, ax = pitch.draw(figsize=(10, 6.5))
             fig.patch.set_facecolor('#12181b')
 
-            # High-resolution 2D histogram + Gaussian smoothing
-            n_bins_x = int(p_length * 4)
-            n_bins_y = int(p_width * 4)
-            heatmap_data, xedges, yedges = np.histogram2d(
+            # High-resolution 2D histogram
+            n_bins_x = int(p_length * 5)
+            n_bins_y = int(p_width * 5)
+            heatmap_data, _, _ = np.histogram2d(
                 x_coords, y_coords,
                 bins=[n_bins_x, n_bins_y],
                 range=[[0, p_length], [0, p_width]]
             )
-            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=2.5)
 
-            # Render smooth bicubic heatmap directly over the pitch
+            # Tighter smoothing
+            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=2.0)
+
+            # Threshold low traffic and mask zeros so pitch markings remain visible
+            threshold = np.percentile(heatmap_smoothed[heatmap_smoothed > 0], 25) if np.any(heatmap_smoothed > 0) else 0
+            heatmap_smoothed[heatmap_smoothed < threshold] = 0
+            masked_heatmap = np.ma.masked_where(heatmap_smoothed.T == 0, heatmap_smoothed.T)
+
+            # Render smooth heatmap via imshow
             ax.imshow(
-                heatmap_smoothed.T,
+                masked_heatmap,
                 extent=[0, p_length, 0, p_width],
                 origin='lower',
                 cmap='magma',
-                norm=PowerNorm(gamma=0.5),
+                norm=PowerNorm(gamma=1.0),
                 alpha=0.85,
-                interpolation='bicubic',
+                interpolation='bilinear',
                 zorder=2
             )
 
@@ -185,51 +192,47 @@ if uploaded_file is not None:
             ax.text(p_length / 2, p_width + 1.2, stats_text, color='#00e676', fontsize=9, fontweight='bold', ha='center')
 
             st.pyplot(fig)
+
+            # --- Speed Diagnostics Block ---
+            st.divider()
+            st.subheader("⚡ Speed Diagnostics")
+
+            all_file_speeds = [r['speed'] for r in raw_records]
+            absolute_raw_peak = max(all_file_speeds) if all_file_speeds else 0.0
+
+            derived_speeds = []
+            for i in range(1, len(raw_records)):
+                t_diff = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
+                if t_diff > 0:
+                    d_lat = (raw_records[i]['lat'] - raw_records[i-1]['lat']) * 111139
+                    d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
+                    dist_m = np.sqrt(d_lat**2 + d_lon**2)
+                    speed_kmh = (dist_m / t_diff) * 3.6
+                    if speed_kmh < 40:
+                        derived_speeds.append(speed_kmh)
+
+            derived_peak = max(derived_speeds) if derived_speeds else 0.0
+
+            col_s1, col_s2, col_s3 = st.columns(3)
+            col_s1.metric(
+                label="App Displayed Peak",
+                value=f"{top_speed_kmh:.1f} km/h",
+                help="Speed displayed in the plot header (subject to lap/time filters and the 95% slice)."
+            )
+            col_s2.metric(
+                label="Absolute FIT Peak",
+                value=f"{absolute_raw_peak:.1f} km/h",
+                help="Fastest single record speed stored in the uploaded FIT file."
+            )
+            col_s3.metric(
+                label="GPS Derived Peak",
+                value=f"{derived_peak:.1f} km/h",
+                help="Computed from raw coordinate changes over time (bypasses watch accelerometer/FusedSpeed)."
+            )
+
+            with st.expander("🔍 View Top 10 Fastest Recorded Speeds"):
+                sorted_speeds = sorted(all_file_speeds, reverse=True)[:10]
+                st.write([f"{s:.2f} km/h ({s * 0.621371:.2f} mph)" for s in sorted_speeds])
+
         else:
             st.warning("No GPS data found within the selected lap and minute window.")
-
-# --- Speed Debugging & Diagnostics ---
-st.subheader("⚡ Speed Diagnostics")
-
-# 1. Absolute max directly from all raw records in the file
-all_file_speeds = [r['speed'] for r in raw_records]
-absolute_raw_peak = max(all_file_speeds) if all_file_speeds else 0.0
-
-# 2. Derive speed directly from GPS coordinates (distance / time) to bypass watch smoothing
-derived_speeds = []
-for i in range(1, len(raw_records)):
-    t_diff = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
-    if t_diff > 0:
-        # Distance in meters (rough equirectangular conversion)
-        d_lat = (raw_records[i]['lat'] - raw_records[i-1]['lat']) * 111139
-        d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
-        dist_m = np.sqrt(d_lat**2 + d_lon**2)
-        speed_kmh = (dist_m / t_diff) * 3.6
-        if speed_kmh < 40:  # Filter out teleporting GPS glitches
-            derived_speeds.append(speed_kmh)
-
-derived_peak = max(derived_speeds) if derived_speeds else 0.0
-
-# Display as clear dashboard cards
-col_s1, col_s2, col_s3 = st.columns(3)
-col_s1.metric(
-    label="App Displayed Peak", 
-    value=f"{top_speed_kmh:.1f} km/h", 
-    help="Speed currently displayed above the pitch (after time range and 95% crop)."
-)
-col_s2.metric(
-    label="Absolute FIT Peak", 
-    value=f"{absolute_raw_peak:.1f} km/h", 
-    help="The fastest single speed point recorded in the entire FIT file."
-)
-col_s3.metric(
-    label="GPS Derived Peak", 
-    value=f"{derived_peak:.1f} km/h", 
-    help="Calculated purely from lat/lon point jumps, bypassing Suunto's smoothing filter."
-)
-
-# Expandable view to inspect top 10 fastest moments
-with st.expander("🔍 View Top 10 Fastest Recorded Points"):
-    sorted_speeds = sorted(all_file_speeds, reverse=True)[:10]
-    st.write([f"{s:.2f} km/h ({s * 0.621371:.2f} mph)" for s in sorted_speeds])
-
