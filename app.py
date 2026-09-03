@@ -58,10 +58,10 @@ if uploaded_file is not None:
         except ValueError:
             active_lap_indices = list(range(len(laps_info)))
 
-    # 2. Extract Raw Record Data
+        # 2. Extract Raw Record Data
     raw_records = []
     for record in fitfile.get_messages('record'):
-        rec_time, lat_val, lon_val, speed_val, dist_val = None, None, None, None, None
+        rec_time, lat_val, lon_val, dist_val = None, None, None, None
         for data in record:
             if data.name == 'timestamp':
                 rec_time = data.value
@@ -69,8 +69,6 @@ if uploaded_file is not None:
                 lat_val = data.value
             elif data.name == 'position_long':
                 lon_val = data.value
-            elif data.name == 'speed':
-                speed_val = data.value
             elif data.name == 'distance':
                 dist_val = data.value
 
@@ -79,22 +77,30 @@ if uploaded_file is not None:
                 'time': rec_time,
                 'lat': lat_val * (180 / 2**31),
                 'lon': lon_val * (180 / 2**31),
-                'speed': speed_val * 3.6 if speed_val is not None else 0.0,
                 'dist': dist_val if dist_val is not None else 0.0
             })
 
-    if raw_records:
-        start_time = raw_records[0]['time']
-        total_duration_mins = int((raw_records[-1]['time'] - start_time).total_seconds() // 60)
+    # Compute GPS-derived speeds directly between points
+    if len(raw_records) > 1:
+        raw_records[0]['speed'] = 0.0
+        for i in range(1, len(raw_records)):
+            dt = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
+            if dt > 0:
+                d_lat = (raw_records[i]['lat'] - raw_records[i-1]['lat']) * 111139
+                d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
+                dist_m = np.sqrt(d_lat**2 + d_lon**2)
+                inst_speed = (dist_m / dt) * 3.6
+                # Discard teleport glitches (>36 km/h is faster than prime Mbappé)
+                raw_records[i]['speed'] = inst_speed if inst_speed <= 36.0 else raw_records[i-1]['speed']
+            else:
+                raw_records[i]['speed'] = raw_records[i-1]['speed']
 
-        # Timeframe filter slider (in minutes)
-        min_time, max_time = st.slider(
-            "Select Match Timeframe (Minutes):",
-            min_value=0,
-            max_value=max(1, total_duration_mins),
-            value=(0, max(1, total_duration_mins)),
-            step=1
-        )
+        # Apply light rolling smooth (window of 3) to prevent one-off GPS noise
+        calc_speeds = [r['speed'] for r in raw_records]
+        smoothed_calc_speeds = np.convolve(calc_speeds, np.ones(3)/3, mode='same')
+        for i, s in enumerate(smoothed_calc_speeds):
+            raw_records[i]['speed'] = float(s)
+
 
         # 3. Filter by Laps and Selected Minute Range
         lats, lons, speeds, distances = [], [], [], []
