@@ -164,7 +164,7 @@ if uploaded_file is not None:
                 bins=[n_bins_x, n_bins_y],
                 range=[[0, p_length], [0, p_width]]
             )
-            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=3.5)
+            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=2.5)
 
             # Render smooth bicubic heatmap directly over the pitch
             ax.imshow(
