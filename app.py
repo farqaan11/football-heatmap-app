@@ -58,7 +58,7 @@ if uploaded_file is not None:
         except ValueError:
             active_lap_indices = list(range(len(laps_info)))
 
-        # 2. Extract Raw Record Data
+    # 2. Extract Raw Record Data
     raw_records = []
     for record in fitfile.get_messages('record'):
         rec_time, lat_val, lon_val, dist_val = None, None, None, None
@@ -77,12 +77,12 @@ if uploaded_file is not None:
                 'time': rec_time,
                 'lat': lat_val * (180 / 2**31),
                 'lon': lon_val * (180 / 2**31),
-                'dist': dist_val if dist_val is not None else 0.0
+                'dist': dist_val if dist_val is not None else 0.0,
+                'speed': 0.0
             })
 
-    # Compute GPS-derived speeds directly between points
     if len(raw_records) > 1:
-        raw_records[0]['speed'] = 0.0
+        # Calculate real GPS displacement speed (bypasses watch accelerometer dampening)
         for i in range(1, len(raw_records)):
             dt = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
             if dt > 0:
@@ -90,17 +90,27 @@ if uploaded_file is not None:
                 d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
                 dist_m = np.sqrt(d_lat**2 + d_lon**2)
                 inst_speed = (dist_m / dt) * 3.6
-                # Discard teleport glitches (>36 km/h is faster than prime Mbappé)
                 raw_records[i]['speed'] = inst_speed if inst_speed <= 36.0 else raw_records[i-1]['speed']
             else:
                 raw_records[i]['speed'] = raw_records[i-1]['speed']
 
-        # Apply light rolling smooth (window of 3) to prevent one-off GPS noise
-        calc_speeds = [r['speed'] for r in raw_records]
-        smoothed_calc_speeds = np.convolve(calc_speeds, np.ones(3)/3, mode='same')
-        for i, s in enumerate(smoothed_calc_speeds):
+        # 3-point rolling filter to prevent single-ping GPS glitches
+        speeds_arr = [r['speed'] for r in raw_records]
+        smoothed_speeds = np.convolve(speeds_arr, np.ones(3)/3, mode='same')
+        for i, s in enumerate(smoothed_speeds):
             raw_records[i]['speed'] = float(s)
 
+        start_time = raw_records[0]['time']
+        total_duration_mins = int((raw_records[-1]['time'] - start_time).total_seconds() // 60)
+
+        # Timeframe filter slider
+        min_time, max_time = st.slider(
+            "Select Match Timeframe (Minutes):",
+            min_value=0,
+            max_value=max(1, total_duration_mins),
+            value=(0, max(1, total_duration_mins)),
+            step=1
+        )
 
         # 3. Filter by Laps and Selected Minute Range
         lats, lons, speeds, distances = [], [], [], []
@@ -121,11 +131,11 @@ if uploaded_file is not None:
             distances.append(r['dist'])
 
         if len(lats) > 1:
-            cutoff = int(len(lats) * 1.0)
-            lats, lons = np.array(lats[:cutoff]), np.array(lons[:cutoff])
-            speeds = np.array(speeds[:cutoff])
+            lats = np.array(lats)
+            lons = np.array(lons)
+            speeds = np.array(speeds)
 
-            total_dist_km = (distances[cutoff - 1] - distances[0]) / 1000 if len(distances) > 0 else 0
+            total_dist_km = (distances[-1] - distances[0]) / 1000 if len(distances) > 0 else 0
             total_dist_miles = total_dist_km * 0.621371
             top_speed_kmh = np.max(speeds) if len(speeds) > 0 else 0
             top_speed_mph = top_speed_kmh * 0.621371
@@ -171,10 +181,8 @@ if uploaded_file is not None:
                 range=[[0, p_length], [0, p_width]]
             )
 
-            # Tighter smoothing
+            # Smooth and mask
             heatmap_smoothed = gaussian_filter(heatmap_data, sigma=2.0)
-
-            # Threshold low traffic and mask zeros so pitch markings remain visible
             threshold = np.percentile(heatmap_smoothed[heatmap_smoothed > 0], 25) if np.any(heatmap_smoothed > 0) else 0
             heatmap_smoothed[heatmap_smoothed < threshold] = 0
             masked_heatmap = np.ma.masked_where(heatmap_smoothed.T == 0, heatmap_smoothed.T)
@@ -198,47 +206,7 @@ if uploaded_file is not None:
             ax.text(p_length / 2, p_width + 1.2, stats_text, color='#00e676', fontsize=9, fontweight='bold', ha='center')
 
             st.pyplot(fig)
-
-            # --- Speed Diagnostics Block ---
-            st.divider()
-            st.subheader("⚡ Speed Diagnostics")
-
-            all_file_speeds = [r['speed'] for r in raw_records]
-            absolute_raw_peak = max(all_file_speeds) if all_file_speeds else 0.0
-
-            derived_speeds = []
-            for i in range(1, len(raw_records)):
-                t_diff = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
-                if t_diff > 0:
-                    d_lat = (raw_records[i]['lat'] - raw_records[i-1]['lat']) * 111139
-                    d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
-                    dist_m = np.sqrt(d_lat**2 + d_lon**2)
-                    speed_kmh = (dist_m / t_diff) * 3.6
-                    if speed_kmh < 40:
-                        derived_speeds.append(speed_kmh)
-
-            derived_peak = max(derived_speeds) if derived_speeds else 0.0
-
-            col_s1, col_s2, col_s3 = st.columns(3)
-            col_s1.metric(
-                label="App Displayed Peak",
-                value=f"{top_speed_kmh:.1f} km/h",
-                help="Speed displayed in the plot header (subject to lap/time filters and the 95% slice)."
-            )
-            col_s2.metric(
-                label="Absolute FIT Peak",
-                value=f"{absolute_raw_peak:.1f} km/h",
-                help="Fastest single record speed stored in the uploaded FIT file."
-            )
-            col_s3.metric(
-                label="GPS Derived Peak",
-                value=f"{derived_peak:.1f} km/h",
-                help="Computed from raw coordinate changes over time (bypasses watch accelerometer/FusedSpeed)."
-            )
-
-            with st.expander("🔍 View Top 10 Fastest Recorded Speeds"):
-                sorted_speeds = sorted(all_file_speeds, reverse=True)[:10]
-                st.write([f"{s:.2f} km/h ({s * 0.621371:.2f} mph)" for s in sorted_speeds])
-
         else:
             st.warning("No GPS data found within the selected lap and minute window.")
+    else:
+        st.warning("Not enough GPS data points found in this file.")
