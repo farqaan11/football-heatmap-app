@@ -115,7 +115,7 @@ if uploaded_file is not None:
             distances.append(r['dist'])
 
         if len(lats) > 1:
-            cutoff = int(len(lats) * 0.95)
+            cutoff = int(len(lats) * 1)
             lats, lons = np.array(lats[:cutoff]), np.array(lons[:cutoff])
             speeds = np.array(speeds[:cutoff])
 
