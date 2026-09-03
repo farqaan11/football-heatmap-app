@@ -156,20 +156,26 @@ if uploaded_file is not None:
             fig, ax = pitch.draw(figsize=(10, 6.5))
             fig.patch.set_facecolor('#12181b')
 
-            # Proportional high-res bins + smoothing + bicubic interpolation
+            # High-resolution 2D histogram + Gaussian smoothing
             n_bins_x = int(p_length * 4)
             n_bins_y = int(p_width * 4)
-            bin_stat = pitch.bin_statistic(x_coords, y_coords, statistic='count', bins=(n_bins_x, n_bins_y))
-            bin_stat['statistic'] = gaussian_filter(bin_stat['statistic'], sigma=4.0)
+            heatmap_data, xedges, yedges = np.histogram2d(
+                x_coords, y_coords,
+                bins=[n_bins_x, n_bins_y],
+                range=[[0, p_length], [0, p_width]]
+            )
+            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=3.5)
 
-            pitch.heatmap(
-                bin_stat, 
-                ax=ax, 
-                cmap='magma', 
-                norm=PowerNorm(gamma=0.5), 
-                edgecolors='none', 
+            # Render smooth bicubic heatmap directly over the pitch
+            ax.imshow(
+                heatmap_smoothed.T,
+                extent=[0, p_length, 0, p_width],
+                origin='lower',
+                cmap='magma',
+                norm=PowerNorm(gamma=0.5),
                 alpha=0.85,
-                interpolation='bicubic'
+                interpolation='bicubic',
+                zorder=2
             )
 
             title_text = f"5-a-Side Match ({min_time}'-{max_time}')" if is_caged else f"Match at {selected_venue} ({min_time}'-{max_time}')"
