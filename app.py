@@ -82,7 +82,7 @@ if uploaded_file is not None:
             })
 
     if len(raw_records) > 1:
-        # Calculate real GPS displacement speed (bypasses watch accelerometer dampening)
+        # Calculate true instantaneous GPS displacement speed (bypasses watch-level smoothing)
         for i in range(1, len(raw_records)):
             dt = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
             if dt > 0:
@@ -90,15 +90,14 @@ if uploaded_file is not None:
                 d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
                 dist_m = np.sqrt(d_lat**2 + d_lon**2)
                 inst_speed = (dist_m / dt) * 3.6
-                raw_records[i]['speed'] = inst_speed if inst_speed <= 36.0 else raw_records[i-1]['speed']
+
+                # Preserve peak sprint bursts up to 34 km/h; drop sensor teleport glitches
+                if inst_speed <= 34.0:
+                    raw_records[i]['speed'] = inst_speed
+                else:
+                    raw_records[i]['speed'] = raw_records[i-1]['speed']
             else:
                 raw_records[i]['speed'] = raw_records[i-1]['speed']
-
-        # 3-point rolling filter to prevent single-ping GPS glitches
-        speeds_arr = [r['speed'] for r in raw_records]
-        smoothed_speeds = np.convolve(speeds_arr, np.ones(3)/3, mode='same')
-        for i, s in enumerate(smoothed_speeds):
-            raw_records[i]['speed'] = float(s)
 
         start_time = raw_records[0]['time']
         total_duration_mins = int((raw_records[-1]['time'] - start_time).total_seconds() // 60)
@@ -143,7 +142,7 @@ if uploaded_file is not None:
             avg_speed_kmh = np.mean(moving_speeds) if len(moving_speeds) > 0 else 0
             avg_speed_mph = avg_speed_kmh * 0.621371
 
-            # Transform Coords
+            # Transform Coordinates to Pitch Dimensions
             if is_caged:
                 p_length, p_width = 40, 20
                 min_lon, max_lon = np.percentile(lons, [1, 99])
@@ -181,13 +180,13 @@ if uploaded_file is not None:
                 range=[[0, p_length], [0, p_width]]
             )
 
-            # Smooth and mask
+            # Smooth and mask low-density areas
             heatmap_smoothed = gaussian_filter(heatmap_data, sigma=2.0)
             threshold = np.percentile(heatmap_smoothed[heatmap_smoothed > 0], 25) if np.any(heatmap_smoothed > 0) else 0
             heatmap_smoothed[heatmap_smoothed < threshold] = 0
             masked_heatmap = np.ma.masked_where(heatmap_smoothed.T == 0, heatmap_smoothed.T)
 
-            # Render smooth heatmap via imshow
+            # Render heatmap
             ax.imshow(
                 masked_heatmap,
                 extent=[0, p_length, 0, p_width],
