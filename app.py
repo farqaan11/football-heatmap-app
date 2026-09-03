@@ -101,11 +101,9 @@ if uploaded_file is not None:
         for r in raw_records:
             elapsed_mins = (r['time'] - start_time).total_seconds() / 60.0
             
-            # Check minute bounds
             if not (min_time <= elapsed_mins <= max_time):
                 continue
 
-            # Check lap bounds (if laps exist)
             if laps_info:
                 in_active_lap = any(laps_info[idx]['start'] <= r['time'] <= laps_info[idx]['end'] for idx in active_lap_indices)
                 if not in_active_lap:
@@ -158,9 +156,21 @@ if uploaded_file is not None:
             fig, ax = pitch.draw(figsize=(10, 6.5))
             fig.patch.set_facecolor('#12181b')
 
-            bin_stat = pitch.bin_statistic(x_coords, y_coords, statistic='count', bins=(60, 60))
-            bin_stat['statistic'] = gaussian_filter(bin_stat['statistic'], sigma=1.2)
-            pitch.heatmap(bin_stat, ax=ax, cmap='magma', norm=PowerNorm(gamma=0.35), edgecolors='none', alpha=0.85)
+            # Proportional high-res bins + smoothing + bicubic interpolation
+            n_bins_x = int(p_length * 4)
+            n_bins_y = int(p_width * 4)
+            bin_stat = pitch.bin_statistic(x_coords, y_coords, statistic='count', bins=(n_bins_x, n_bins_y))
+            bin_stat['statistic'] = gaussian_filter(bin_stat['statistic'], sigma=4.0)
+
+            pitch.heatmap(
+                bin_stat, 
+                ax=ax, 
+                cmap='magma', 
+                norm=PowerNorm(gamma=0.5), 
+                edgecolors='none', 
+                alpha=0.85,
+                interpolation='bicubic'
+            )
 
             title_text = f"5-a-Side Match ({min_time}'-{max_time}')" if is_caged else f"Match at {selected_venue} ({min_time}'-{max_time}')"
             stats_text = f"Distance: {total_dist_km:.2f} km ({total_dist_miles:.2f} mi)  |  Top Speed: {top_speed_kmh:.1f} km/h ({top_speed_mph:.1f} mph)  |  Avg Speed: {avg_speed_kmh:.1f} km/h ({avg_speed_mph:.1f} mph)"
