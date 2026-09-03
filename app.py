@@ -151,30 +151,39 @@ if uploaded_file is not None:
                 valid = (x_coords >= -PADDING) & (x_coords <= p_length + PADDING) & (y_coords >= -PADDING) & (y_coords <= p_width + PADDING)
                 x_coords, y_coords = x_coords[valid], y_coords[valid]
 
-            # Draw Pitch
-            pitch = Pitch(pitch_type='custom', pitch_length=p_length, pitch_width=p_width, pitch_color='#12181b', line_color='#324148')
+                        # Draw Pitch
+            pitch = Pitch(pitch_type='custom', pitch_length=p_length, pitch_width=p_width, pitch_color='#12181b', line_color='#475569')
             fig, ax = pitch.draw(figsize=(10, 6.5))
             fig.patch.set_facecolor('#12181b')
 
-            # High-resolution 2D histogram + Gaussian smoothing
-            n_bins_x = int(p_length * 4)
-            n_bins_y = int(p_width * 4)
-            heatmap_data, xedges, yedges = np.histogram2d(
+            # 1. High-res grid
+            n_bins_x = int(p_length * 5)
+            n_bins_y = int(p_width * 5)
+            heatmap_data, _, _ = np.histogram2d(
                 x_coords, y_coords,
                 bins=[n_bins_x, n_bins_y],
                 range=[[0, p_length], [0, p_width]]
             )
-            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=3.5)
 
-            # Render smooth bicubic heatmap directly over the pitch
+            # 2. Tight smoothing (smaller, defined hotspots)
+            heatmap_smoothed = gaussian_filter(heatmap_data, sigma=2.0)
+
+            # 3. Cut off low-traffic "noise" so background stays clean
+            threshold = np.percentile(heatmap_smoothed[heatmap_smoothed > 0], 25) if np.any(heatmap_smoothed > 0) else 0
+            heatmap_smoothed[heatmap_smoothed < threshold] = 0
+
+            # 4. Mask pure zeros so pitch lines show through empty space
+            masked_heatmap = np.ma.masked_where(heatmap_smoothed.T == 0, heatmap_smoothed.T)
+
+            # 5. Render sharp, distinct hotspots
             ax.imshow(
-                heatmap_smoothed.T,
+                masked_heatmap,
                 extent=[0, p_length, 0, p_width],
                 origin='lower',
                 cmap='magma',
-                norm=PowerNorm(gamma=0.5),
+                norm=PowerNorm(gamma=1.0),  # Linear scaling avoids inflating 1-off pings
                 alpha=0.85,
-                interpolation='bicubic',
+                interpolation='bilinear',
                 zorder=2
             )
 
