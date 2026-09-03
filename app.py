@@ -187,3 +187,49 @@ if uploaded_file is not None:
             st.pyplot(fig)
         else:
             st.warning("No GPS data found within the selected lap and minute window.")
+
+# --- Speed Debugging & Diagnostics ---
+st.subheader("⚡ Speed Diagnostics")
+
+# 1. Absolute max directly from all raw records in the file
+all_file_speeds = [r['speed'] for r in raw_records]
+absolute_raw_peak = max(all_file_speeds) if all_file_speeds else 0.0
+
+# 2. Derive speed directly from GPS coordinates (distance / time) to bypass watch smoothing
+derived_speeds = []
+for i in range(1, len(raw_records)):
+    t_diff = (raw_records[i]['time'] - raw_records[i-1]['time']).total_seconds()
+    if t_diff > 0:
+        # Distance in meters (rough equirectangular conversion)
+        d_lat = (raw_records[i]['lat'] - raw_records[i-1]['lat']) * 111139
+        d_lon = (raw_records[i]['lon'] - raw_records[i-1]['lon']) * 111139 * np.cos(np.radians(raw_records[i]['lat']))
+        dist_m = np.sqrt(d_lat**2 + d_lon**2)
+        speed_kmh = (dist_m / t_diff) * 3.6
+        if speed_kmh < 40:  # Filter out teleporting GPS glitches
+            derived_speeds.append(speed_kmh)
+
+derived_peak = max(derived_speeds) if derived_speeds else 0.0
+
+# Display as clear dashboard cards
+col_s1, col_s2, col_s3 = st.columns(3)
+col_s1.metric(
+    label="App Displayed Peak", 
+    value=f"{top_speed_kmh:.1f} km/h", 
+    help="Speed currently displayed above the pitch (after time range and 95% crop)."
+)
+col_s2.metric(
+    label="Absolute FIT Peak", 
+    value=f"{absolute_raw_peak:.1f} km/h", 
+    help="The fastest single speed point recorded in the entire FIT file."
+)
+col_s3.metric(
+    label="GPS Derived Peak", 
+    value=f"{derived_peak:.1f} km/h", 
+    help="Calculated purely from lat/lon point jumps, bypassing Suunto's smoothing filter."
+)
+
+# Expandable view to inspect top 10 fastest moments
+with st.expander("🔍 View Top 10 Fastest Recorded Points"):
+    sorted_speeds = sorted(all_file_speeds, reverse=True)[:10]
+    st.write([f"{s:.2f} km/h ({s * 0.621371:.2f} mph)" for s in sorted_speeds])
+
